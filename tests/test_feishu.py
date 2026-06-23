@@ -1,11 +1,10 @@
 """飞书通知属性测试。"""
 
 import json
-import logging
 from unittest.mock import MagicMock, patch
 
-import pytest
-from hypothesis import given, settings as h_settings
+from hypothesis import given
+from hypothesis import settings as h_settings
 from hypothesis import strategies as st
 
 from sequoia_x.core.config import Settings
@@ -80,6 +79,7 @@ def test_notification_uses_config_url(webhook_url: str) -> None:
 def test_http_failure_logs_error(status_code: int) -> None:
     """属性 12：非 200 响应时，send() 应记录 ERROR 级别日志，不抛出异常。"""
     import logging as _logging
+
     import sequoia_x.notify.feishu as feishu_module
 
     settings = make_settings()

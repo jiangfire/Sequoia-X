@@ -1,8 +1,10 @@
 """配置管理属性测试。"""
 
 import os
+
 import pytest
-from hypothesis import given, settings as h_settings, HealthCheck
+from hypothesis import HealthCheck, given
+from hypothesis import settings as h_settings
 from hypothesis import strategies as st
 from pydantic import ValidationError
 
@@ -34,7 +36,6 @@ def test_env_overrides_default(db_path: str, monkeypatch) -> None:
 # Feature: sequoia-x-v2, Property 2: 缺失必填字段触发 ValidationError
 def test_missing_required_field_raises() -> None:
     """属性 2：缺少 feishu_webhook_url 时，实例化 Settings 应抛出 ValidationError。"""
-    import os
     from sequoia_x.core.config import Settings
 
     # 确保环境变量中没有该字段

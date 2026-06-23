@@ -39,7 +39,7 @@ class TurtleTradeStrategy(BaseStrategy):
         bs.login()
         try:
             for symbol in symbols:
-                bs_code = self.engine._to_baostock_code(symbol)
+                bs_code = self.engine.to_baostock_code(symbol)
                 rs = bs.query_history_k_data_plus(
                     bs_code,
                     "close,volume,turn",

@@ -1,6 +1,7 @@
 """日志系统属性测试。"""
 
-from hypothesis import given, settings as h_settings
+from hypothesis import given
+from hypothesis import settings as h_settings
 from hypothesis import strategies as st
 
 

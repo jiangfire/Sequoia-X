@@ -2,7 +2,6 @@
 
 import sqlite3
 from pathlib import Path
-
 from typing import cast
 
 import pandas as pd
@@ -51,7 +50,7 @@ def _bs_fetch_batch(tasks: list[tuple[str, str, str, str]]) -> list[list[str]]:
         if rs is None or rs.error_code != "0":
             continue
         while rs.next():
-            results.append([symbol] + rs.get_row_data())
+            results.append([symbol, *rs.get_row_data()])
     bs.logout()
     return results
 
@@ -82,15 +81,14 @@ class DataEngine:
 
     def get_ohlcv(self, symbol: str) -> pd.DataFrame:
         with sqlite3.connect(self.db_path) as conn:
-            df = pd.read_sql(
+            return pd.read_sql(
                 "SELECT * FROM stock_daily WHERE symbol = ? ORDER BY date",
                 conn,
                 params=(symbol,),
             )
-        return df
 
     @staticmethod
-    def _to_baostock_code(symbol: str) -> str:
+    def to_baostock_code(symbol: str) -> str:
         """将纯数字代码转为 baostock 格式：6/9开头 -> sh，其余 -> sz。"""
         prefix = "sh" if symbol.startswith(("6", "9")) else "sz"
         return f"{prefix}.{symbol}"
@@ -120,7 +118,7 @@ class DataEngine:
             start = today_str
             if last_date:
                 start = (date.fromisoformat(last_date) + timedelta(days=1)).strftime("%Y-%m-%d")
-            tasks.append((symbol, self._to_baostock_code(symbol), start, today_str))
+            tasks.append((symbol, self.to_baostock_code(symbol), start, today_str))
 
         if not tasks:
             logger.info("所有股票已是最新，无需更新")
@@ -220,7 +218,7 @@ class DataEngine:
                 if last_date:
                     start = (date.fromisoformat(last_date) + timedelta(days=1)).strftime("%Y-%m-%d")
 
-                bs_code = self._to_baostock_code(symbol)
+                bs_code = self.to_baostock_code(symbol)
 
                 # 带重试的查询
                 rows: list[list[str]] = []

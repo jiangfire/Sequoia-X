@@ -1,12 +1,14 @@
 """数据引擎属性测试。"""
 
+import contextlib
 import sqlite3
 import tempfile
 from datetime import date
 from pathlib import Path
 
 import pandas as pd
-from hypothesis import given, settings as h_settings
+from hypothesis import given
+from hypothesis import settings as h_settings
 from hypothesis import strategies as st
 
 from sequoia_x.core.config import Settings
@@ -47,10 +49,8 @@ def test_unique_symbol_date_constraint(symbol: str, trade_date: date) -> None:
         df = pd.DataFrame([row])
         with sqlite3.connect(engine.db_path) as conn:
             df.to_sql("stock_daily", conn, if_exists="append", index=False, method="multi")
-            try:
+            with contextlib.suppress(sqlite3.IntegrityError):
                 df.to_sql("stock_daily", conn, if_exists="append", index=False, method="multi")
-            except sqlite3.IntegrityError:
-                pass
             count = conn.execute(
                 "SELECT COUNT(*) FROM stock_daily WHERE symbol=? AND date=?",
                 (symbol, str(trade_date)),

@@ -1,10 +1,10 @@
 """主程序入口属性测试。"""
 
-import sys
 from unittest.mock import patch
 
 import pytest
-from hypothesis import given, settings as h_settings
+from hypothesis import given
+from hypothesis import settings as h_settings
 from hypothesis import strategies as st
 
 # 预先导入 main 模块，避免在 @given 循环中重复导入
