@@ -8,11 +8,13 @@
 import argparse
 import sys
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from datetime import date
 
 import socket
+
 socket.setdefaulttimeout(10.0)
 
 from sequoia_x.core.config import get_settings
@@ -98,6 +100,7 @@ def main() -> None:
             _logger.exception("主流程发生未捕获异常，程序终止")
         except Exception:
             import traceback
+
             traceback.print_exc()
         sys.exit(1)
 

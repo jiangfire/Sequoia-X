@@ -92,8 +92,8 @@ class TurtleTradeStrategy(BaseStrategy):
                 liquid = last["turnover"] > 100_000_000
 
                 # 【新增防守条件】拒绝郑州煤电式的高开低走大阴线！
-                is_yang = last["close"] > last["open"]   # 实体必须是阳线（红柱）
-                is_up = last["close"] > prev["close"]    # 必须是真涨，不能是假阳线
+                is_yang = last["close"] > last["open"]  # 实体必须是阳线（红柱）
+                is_up = last["close"] > prev["close"]  # 必须是真涨，不能是假阳线
 
                 if breakout and liquid and is_yang and is_up:
                     candidates.append(symbol)

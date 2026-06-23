@@ -29,7 +29,7 @@ class Settings(BaseSettings):
         webhooks: dict[str, str] = {}
         for key, value in os.environ.items():
             if key.upper().startswith(prefix):
-                strategy_key = key[len(prefix):].lower()
+                strategy_key = key[len(prefix) :].lower()
                 webhooks[strategy_key] = value
 
         # 注入到初始化数据中（通过 init_kwargs source）
@@ -50,7 +50,7 @@ class Settings(BaseSettings):
         webhooks: dict[str, str] = dict(self.strategy_webhooks)
         for key, value in os.environ.items():
             if key.upper().startswith(prefix):
-                strategy_key = key[len(prefix):].lower()
+                strategy_key = key[len(prefix) :].lower()
                 webhooks[strategy_key] = value
 
         # 使用 object.__setattr__ 绕过 pydantic 的不可变保护

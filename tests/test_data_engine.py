@@ -35,9 +35,14 @@ def test_unique_symbol_date_constraint(symbol: str, trade_date: date) -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         engine, _ = make_engine_in(tmp_dir)
         row = {
-            "symbol": symbol, "date": str(trade_date),
-            "open": 10.0, "high": 11.0, "low": 9.0, "close": 10.5,
-            "volume": 1000.0, "turnover": 10500.0,
+            "symbol": symbol,
+            "date": str(trade_date),
+            "open": 10.0,
+            "high": 11.0,
+            "low": 9.0,
+            "close": 10.5,
+            "volume": 1000.0,
+            "turnover": 10500.0,
         }
         df = pd.DataFrame([row])
         with sqlite3.connect(engine.db_path) as conn:

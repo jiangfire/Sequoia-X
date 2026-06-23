@@ -3,6 +3,8 @@
 import sqlite3
 from pathlib import Path
 
+from typing import cast
+
 import pandas as pd
 
 from sequoia_x.core.config import Settings
@@ -31,9 +33,10 @@ CREATE INDEX IF NOT EXISTS idx_symbol_date ON stock_daily (symbol, date);
 """
 
 
-def _bs_fetch_batch(tasks: list) -> list:
+def _bs_fetch_batch(tasks: list[tuple[str, str, str, str]]) -> list[list[str]]:
     """多进程 worker：独立 login，批量拉取 baostock 数据。"""
     import baostock as bs
+
     bs.login()
     results = []
     for symbol, bs_code, start, end in tasks:
@@ -45,7 +48,7 @@ def _bs_fetch_batch(tasks: list) -> list:
             frequency="d",
             adjustflag="1",  # 后复权
         )
-        if rs.error_code != "0":
+        if rs is None or rs.error_code != "0":
             continue
         while rs.next():
             results.append([symbol] + rs.get_row_data())
@@ -139,17 +142,22 @@ class DataEngine:
             logger.info("无新数据（可能非交易日）")
             return 0
 
-        df = pd.DataFrame(all_rows, columns=["symbol", "date", "open", "high", "low", "close", "volume", "turnover"])
+        df = pd.DataFrame(
+            all_rows,
+            columns=["symbol", "date", "open", "high", "low", "close", "volume", "turnover"],
+        )
         for col in ["open", "high", "low", "close", "volume", "turnover"]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-        df = df.dropna(subset=["close"])
+        df = cast(pd.DataFrame, df.dropna(subset=["close"]))
         df = df[df["volume"] > 0]
 
         count = len(df)
         with sqlite3.connect(self.db_path) as conn:
-            for d in df["date"].unique().tolist():
+            for d in df["date"].unique().tolist():  # pyright: ignore[reportAttributeAccessIssue]
                 conn.execute("DELETE FROM stock_daily WHERE date = ?", (d,))
-            df.to_sql("stock_daily", conn, if_exists="append", index=False, method="multi", chunksize=500)
+            df.to_sql(
+                "stock_daily", conn, if_exists="append", index=False, method="multi", chunksize=500
+            )
             conn.commit()
 
         logger.info(f"sync_today_bulk: 写入 {count} 条数据")
@@ -194,8 +202,7 @@ class DataEngine:
                     skipped += 1
                     if (i + 1) % 500 == 0:
                         logger.info(
-                            f"已处理 {i + 1}/{len(symbols)}，"
-                            f"成功 {success} 跳过 {skipped} 失败 {failed}"
+                            f"已处理 {i + 1}/{len(symbols)}，成功 {success} 跳过 {skipped} 失败 {failed}"
                         )
                     continue
 
@@ -216,7 +223,8 @@ class DataEngine:
                 bs_code = self._to_baostock_code(symbol)
 
                 # 带重试的查询
-                rows = []
+                rows: list[list[str]] = []
+                fields: list[str] = []
                 query_ok = False
                 for attempt in range(max_retries):
                     try:
@@ -229,12 +237,16 @@ class DataEngine:
                             adjustflag="1",  # 后复权
                         )
 
-                        if rs.error_code != "0":
-                            raise RuntimeError(rs.error_msg)
+                        if rs is None or rs.error_code != "0":
+                            raise RuntimeError(rs.error_msg if rs else "查询返回 None")
 
+                        if rs.fields is not None:
+                            fields = list(rs.fields)
                         rows = []
                         while rs.next():
-                            rows.append(rs.get_row_data())
+                            row_data = rs.get_row_data()
+                            if row_data is not None:
+                                rows.append(list(row_data))
                         query_ok = True
                         break
 
@@ -260,10 +272,10 @@ class DataEngine:
                     skipped += 1
                     continue
 
-                df = pd.DataFrame(rows, columns=rs.fields)
+                df = pd.DataFrame(rows, columns=fields)
                 for col in ["open", "high", "low", "close", "volume", "amount"]:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
-                df = df.dropna(subset=["close"])
+                df = cast(pd.DataFrame, df.dropna(subset=["close"]))
                 df = df[df["volume"] > 0]
 
                 if df.empty:
@@ -271,14 +283,18 @@ class DataEngine:
                     continue
 
                 df["symbol"] = symbol
-                df = df.rename(columns={"amount": "turnover"})
+                df = df.rename(columns={"amount": "turnover"})  # pyright: ignore[reportCallIssue]
                 df = df[["symbol", "date", "open", "high", "low", "close", "volume", "turnover"]]
 
                 try:
                     with sqlite3.connect(self.db_path) as conn:
                         df.to_sql(
-                            "stock_daily", conn, if_exists="append",
-                            index=False, method="multi", chunksize=500,
+                            "stock_daily",
+                            conn,
+                            if_exists="append",
+                            index=False,
+                            method="multi",
+                            chunksize=500,
                         )
                 except sqlite3.IntegrityError:
                     pass
@@ -287,8 +303,7 @@ class DataEngine:
 
                 if (i + 1) % 500 == 0:
                     logger.info(
-                        f"已处理 {i + 1}/{len(symbols)}，"
-                        f"成功 {success} 跳过 {skipped} 失败 {failed}"
+                        f"已处理 {i + 1}/{len(symbols)}，成功 {success} 跳过 {skipped} 失败 {failed}"
                     )
 
         finally:
@@ -312,9 +327,9 @@ class DataEngine:
             symbols = []
             while rs.next():
                 row = rs.get_row_data()
-                code = row[0]           # "sh.600000" or "sz.000001"
-                status = row[4]         # "1" = 上市
-                stock_type = row[5]     # "1" = 股票
+                code = row[0]  # "sh.600000" or "sz.000001"
+                status = row[4]  # "1" = 上市
+                stock_type = row[5]  # "1" = 股票
                 if status == "1" and stock_type == "1":
                     symbols.append(code.split(".")[1])  # 提取纯数字代码
             logger.info(f"获取股票列表完成，共 {len(symbols)} 只")
@@ -327,7 +342,5 @@ class DataEngine:
 
     def get_local_symbols(self) -> list[str]:
         with sqlite3.connect(self.db_path) as conn:
-            rows = conn.execute(
-                "SELECT DISTINCT symbol FROM stock_daily"
-            ).fetchall()
+            rows = conn.execute("SELECT DISTINCT symbol FROM stock_daily").fetchall()
         return [row[0] for row in rows]

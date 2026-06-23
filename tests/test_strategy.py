@@ -17,7 +17,9 @@ from sequoia_x.strategy.ma_volume import MaVolumeStrategy
 @given(
     symbols=st.lists(
         st.text(min_size=6, max_size=6, alphabet="0123456789"),
-        min_size=0, max_size=3, unique=True,
+        min_size=0,
+        max_size=3,
+        unique=True,
     )
 )
 @h_settings(max_examples=30, deadline=None)
