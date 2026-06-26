@@ -304,9 +304,12 @@ class DataEngine:
         if not _login():
             return
 
+        logger.info(f"开始回填 {len(symbols)} 只股票的历史数据...")
+
         success = 0
         skipped = 0
         failed = 0
+        total_rows = 0
         since_reconnect = 0
         pending_frames: list[pd.DataFrame] = []
 
@@ -315,9 +318,10 @@ class DataEngine:
                 last_date = last_date_map.get(symbol)
                 if last_date and last_date >= today_str:
                     skipped += 1
-                    if (i + 1) % 500 == 0:
+                    if (i + 1) % 100 == 0:
                         logger.info(
-                            f"已处理 {i + 1}/{len(symbols)}，成功 {success} 跳过 {skipped} 失败 {failed}"
+                            f"已处理 {i + 1}/{len(symbols)}，"
+                            f"成功 {success} | 跳过 {skipped} | 失败 {failed}"
                         )
                     continue
 
@@ -424,29 +428,33 @@ class DataEngine:
 
                 # 每 500 只股票批量写入一次，平衡内存与性能
                 if len(pending_frames) >= 500:
-                    self._bulk_append(pending_frames)
+                    total_rows += self._bulk_append(pending_frames)
                     pending_frames = []
 
-                if (i + 1) % 500 == 0:
+                if (i + 1) % 100 == 0:
                     logger.info(
-                        f"已处理 {i + 1}/{len(symbols)}，成功 {success} 跳过 {skipped} 失败 {failed}"
+                        f"已处理 {i + 1}/{len(symbols)}，"
+                        f"成功 {success} | 跳过 {skipped} | 失败 {failed}"
                     )
 
             # 写入剩余数据
             if pending_frames:
-                self._bulk_append(pending_frames)
+                total_rows += self._bulk_append(pending_frames)
 
         finally:
             bs.logout()
 
         self._expire_cache()
-        logger.info(f"回填完成 — 成功: {success} | 跳过: {skipped} | 失败: {failed}")
+        logger.info(
+            f"回填完成 — 成功: {success} | 跳过: {skipped} | 失败: {failed} | 总条数: {total_rows}"
+        )
 
-    def _bulk_append(self, frames: list[pd.DataFrame]) -> None:
+    def _bulk_append(self, frames: list[pd.DataFrame]) -> int:
         """批量追加 DataFrame 到 stock_daily，遇到重复键仅警告。"""
         if not frames:
-            return
+            return 0
         df = pd.concat(frames, ignore_index=True)
+        row_count = len(df)
         try:
             with self.connect() as conn:
                 df.to_sql(
@@ -458,8 +466,11 @@ class DataEngine:
                     chunksize=500,
                 )
                 conn.commit()
+            logger.info(f"批量写入 {row_count} 条数据到 SQLite")
+            return row_count
         except sqlite3.IntegrityError as exc:
             logger.warning(f"批量写入时遇到重复数据（已忽略）：{exc}")
+            return 0
 
     # ── 股票列表 ──
 
