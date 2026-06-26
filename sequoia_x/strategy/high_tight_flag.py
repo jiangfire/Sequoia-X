@@ -19,48 +19,48 @@ class HighTightFlagStrategy(BaseStrategy):
 
     def run(self) -> list[str]:
         """
-        遍历全市场，返回满足高旗形整理条件的股票代码列表。
+        基于全表缓存向量化计算，返回满足高旗形整理条件的股票代码列表。
 
         Returns:
             满足条件的股票代码列表。
         """
-        symbols = self.engine.get_local_symbols()
-        selected: list[str] = []
+        cache = self.engine.ohlcv_cache
+        if cache is None:
+            cache = self.engine.load_ohlcv_cache()
 
-        for symbol in symbols:
-            try:
-                df = self.engine.get_ohlcv(symbol)
-                if len(df) < self._MIN_BARS:
-                    continue
+        if cache.empty:
+            return []
 
-                # 向量化计算各窗口指标
-                tail40 = df.tail(40)
-                tail10 = df.tail(10)
+        df = cache.reset_index().sort_values(["symbol", "date"])
 
-                high40 = tail40["high"].max()
-                low40 = tail40["low"].min()
-                high10 = tail10["high"].max()
-                low10 = tail10["low"].min()
+        # 按 symbol 分组滚动窗口
+        df["high_40"] = df.groupby("symbol")["high"].transform(
+            lambda s: s.rolling(40, min_periods=40).max()
+        )
+        df["low_40"] = df.groupby("symbol")["low"].transform(
+            lambda s: s.rolling(40, min_periods=40).min()
+        )
+        df["high_10"] = df.groupby("symbol")["high"].transform(
+            lambda s: s.rolling(10, min_periods=10).max()
+        )
+        df["low_10"] = df.groupby("symbol")["low"].transform(
+            lambda s: s.rolling(10, min_periods=10).min()
+        )
+        # 截至昨日的 20 日均量
+        df["vol_ma20_prev"] = df.groupby("symbol")["volume"].transform(
+            lambda s: s.rolling(20).mean().shift(1)
+        )
 
-                if low40 == 0 or low10 == 0:
-                    continue
+        latest = df.groupby("symbol").tail(1)
+        latest = latest.dropna(subset=["high_40", "low_40", "high_10", "low_10", "vol_ma20_prev"])
+        latest = latest[(latest["low_40"] > 0) & (latest["low_10"] > 0)]
 
-                # 条件 1：强动量
-                momentum = high40 / low40 > 1.6
-                # 条件 2：极度收敛
-                consolidation = high10 / low10 < 1.15
-                # 条件 3：高位抗跌（近10天最低点不得低于40天最高点的80%）
-                high_level = low10 >= high40 * 0.8
-                # 条件 4：缩量（向量化均值）
-                vol_ma20 = df["volume"].iloc[-21:-1].mean()
-                shrink = df["volume"].iloc[-1] < vol_ma20 * 0.6
+        momentum = latest["high_40"] / latest["low_40"] > 1.6
+        consolidation = latest["high_10"] / latest["low_10"] < 1.15
+        high_level = latest["low_10"] >= latest["high_40"] * 0.8
+        shrink = latest["volume"] < latest["vol_ma20_prev"] * 0.6
 
-                if momentum and consolidation and high_level and shrink:
-                    selected.append(symbol)
-
-            except Exception as exc:
-                logger.warning(f"[{symbol}] HighTightFlagStrategy 计算失败：{exc}")
-                continue
+        selected = latest[momentum & consolidation & high_level & shrink]["symbol"].tolist()
 
         logger.info(f"HighTightFlagStrategy 选出 {len(selected)} 只股票")
         return selected

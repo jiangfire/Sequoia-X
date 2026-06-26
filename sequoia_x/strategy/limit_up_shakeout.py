@@ -21,41 +21,41 @@ class LimitUpShakeoutStrategy(BaseStrategy):
 
     def run(self) -> list[str]:
         """
-        遍历全市场，返回满足涨停洗盘条件的股票代码列表。
+        基于全表缓存向量化计算，返回满足涨停洗盘条件的股票代码列表。
 
         Returns:
             满足条件的股票代码列表。
         """
-        symbols = self.engine.get_local_symbols()
-        selected: list[str] = []
+        cache = self.engine.ohlcv_cache
+        if cache is None:
+            cache = self.engine.load_ohlcv_cache()
 
-        for symbol in symbols:
-            try:
-                df = self.engine.get_ohlcv(symbol)
-                if len(df) < self._MIN_BARS:
-                    continue
+        if cache.empty:
+            return []
 
-                # 取最近三根 K 线（向量化索引，无 iterrows）
-                prev2 = df.iloc[-3]  # 前日
-                prev1 = df.iloc[-2]  # 昨日
-                today = df.iloc[-1]  # 今日
+        df = cache.reset_index().sort_values(["symbol", "date"])
 
-                # 条件 1：昨日涨停（按板块动态阈值）
-                limit_pct = get_limit_pct(symbol, is_st=bool(today.get("is_st", 0)))
-                limit_up_yesterday = prev1["close"] >= prev2["close"] * (1 + limit_pct - 0.005)
-                # 条件 2：今日收阴
-                bearish_today = today["close"] < today["open"]
-                # 条件 3：今日放量
-                volume_surge = today["volume"] > prev1["volume"] * 2.0
-                # 条件 4：支撑不破
-                support_hold = today["low"] >= prev1["close"]
+        # 取最近三根 K 线对应的数据
+        df["prev1_close"] = df.groupby("symbol")["close"].shift(1)
+        df["prev2_close"] = df.groupby("symbol")["close"].shift(2)
+        df["prev1_volume"] = df.groupby("symbol")["volume"].shift(1)
 
-                if limit_up_yesterday and bearish_today and volume_surge and support_hold:
-                    selected.append(symbol)
+        latest = df.groupby("symbol").tail(1)
+        latest = latest.dropna(subset=["prev1_close", "prev2_close", "prev1_volume"])
 
-            except Exception as exc:
-                logger.warning(f"[{symbol}] LimitUpShakeoutStrategy 计算失败：{exc}")
-                continue
+        # 按板块动态阈值
+        latest["limit_pct"] = latest["symbol"].map(get_limit_pct)
+
+        limit_up_yesterday = latest["prev1_close"] >= latest["prev2_close"] * (
+            1 + latest["limit_pct"] - 0.005
+        )
+        bearish_today = latest["close"] < latest["open"]
+        volume_surge = latest["volume"] > latest["prev1_volume"] * 2.0
+        support_hold = latest["low"] >= latest["prev1_close"]
+
+        selected = latest[limit_up_yesterday & bearish_today & volume_surge & support_hold][
+            "symbol"
+        ].tolist()
 
         logger.info(f"LimitUpShakeoutStrategy 选出 {len(selected)} 只股票")
         return selected

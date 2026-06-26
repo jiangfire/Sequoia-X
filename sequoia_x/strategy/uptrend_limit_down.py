@@ -1,7 +1,5 @@
 """上升趋势跌停策略：趋势中放量跌停，捕捉错杀机会。"""
 
-import pandas as pd
-
 from sequoia_x.core.logger import get_logger
 from sequoia_x.strategy._utils import get_limit_pct
 from sequoia_x.strategy.base import BaseStrategy
@@ -22,44 +20,39 @@ class UptrendLimitDownStrategy(BaseStrategy):
 
     def run(self) -> list[str]:
         """
-        遍历全市场，返回满足上升趋势跌停条件的股票代码列表。
+        基于全表缓存向量化计算，返回满足上升趋势跌停条件的股票代码列表。
 
         Returns:
             满足条件的股票代码列表。
         """
-        symbols = self.engine.get_local_symbols()
-        selected: list[str] = []
+        cache = self.engine.ohlcv_cache
+        if cache is None:
+            cache = self.engine.load_ohlcv_cache()
 
-        for symbol in symbols:
-            try:
-                df = self.engine.get_ohlcv(symbol)
-                if len(df) < self._MIN_BARS:
-                    continue
+        if cache.empty:
+            return []
 
-                # 向量化计算均线
-                df["ma20"] = df["close"].rolling(20).mean()
-                df["ma60"] = df["close"].rolling(60).mean()
-                df["vol_ma20"] = df["volume"].rolling(20).mean()
+        df = cache.reset_index().sort_values(["symbol", "date"])
 
-                prev = df.iloc[-2]  # 昨日
-                today = df.iloc[-1]  # 今日
+        # 按 symbol 分组滚动均线
+        df["ma20"] = df.groupby("symbol")["close"].transform(lambda s: s.rolling(20).mean())
+        df["ma60"] = df.groupby("symbol")["close"].transform(lambda s: s.rolling(60).mean())
+        df["vol_ma20"] = df.groupby("symbol")["volume"].transform(lambda s: s.rolling(20).mean())
+        df["prev_ma20"] = df.groupby("symbol")["ma20"].shift(1)
+        df["prev_ma60"] = df.groupby("symbol")["ma60"].shift(1)
+        df["prev_close"] = df.groupby("symbol")["close"].shift(1)
 
-                if pd.isna(prev["ma20"]) or pd.isna(prev["ma60"]) or pd.isna(today["vol_ma20"]):
-                    continue
+        latest = df.groupby("symbol").tail(1)
+        latest = latest.dropna(subset=["prev_ma20", "prev_ma60", "vol_ma20", "prev_close"])
 
-                # 条件 1：上升趋势（昨日均线多头排列）
-                uptrend = prev["ma20"] > prev["ma60"]
-                # 条件 2：放量跌停（按板块动态阈值）
-                limit_pct = get_limit_pct(symbol, is_st=bool(today.get("is_st", 0)))
-                limit_down = today["close"] <= prev["close"] * (1 - limit_pct + 0.005)
-                volume_surge = today["volume"] > today["vol_ma20"] * 2.0
+        # 按板块动态阈值
+        latest["limit_pct"] = latest["symbol"].map(get_limit_pct)
 
-                if uptrend and limit_down and volume_surge:
-                    selected.append(symbol)
+        uptrend = latest["prev_ma20"] > latest["prev_ma60"]
+        limit_down = latest["close"] <= latest["prev_close"] * (1 - latest["limit_pct"] + 0.005)
+        volume_surge = latest["volume"] > latest["vol_ma20"] * 2.0
 
-            except Exception as exc:
-                logger.warning(f"[{symbol}] UptrendLimitDownStrategy 计算失败：{exc}")
-                continue
+        selected = latest[uptrend & limit_down & volume_surge]["symbol"].tolist()
 
         logger.info(f"UptrendLimitDownStrategy 选出 {len(selected)} 只股票")
         return selected

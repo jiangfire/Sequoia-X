@@ -1,7 +1,5 @@
 """海龟交易策略：20日新高突破 + 成交额过亿 + 动量阳线过滤。"""
 
-import pandas as pd
-
 from sequoia_x.core.logger import get_logger
 from sequoia_x.strategy.base import BaseStrategy
 
@@ -19,70 +17,48 @@ class TurtleTradeStrategy(BaseStrategy):
 
     _MIN_BARS: int = 21  # 至少需要 21 根 K 线（20日窗口 + 当日）
 
-    def _get_market_caps(self, symbols: list[str]) -> dict[str, float]:
-        """基于本地缓存数据推导流通市值：close * volume / (turn / 100)。
-
-        该推导依赖已存储的换手率（turn），无需额外调用 baostock。
-        """
-        market_caps: dict[str, float] = {}
-        for symbol in symbols:
-            try:
-                df = self.engine.get_ohlcv(symbol)
-                if df.empty:
-                    continue
-                last = df.iloc[-1]
-                close = float(last["close"])
-                volume = float(last["volume"])
-                turn = float(last["turn"])
-                if turn > 0 and pd.notna(close) and pd.notna(volume):
-                    circulating_shares = volume / (turn / 100)
-                    market_caps[symbol] = circulating_shares * close
-            except (ValueError, ZeroDivisionError, KeyError):
-                continue
-        return market_caps
-
     def run(self) -> list[str]:
         """
-        遍历全市场，返回满足海龟突破条件的股票代码列表。
+        基于全表缓存向量化计算，返回满足海龟突破条件的股票代码列表。
         """
-        symbols = self.engine.get_local_symbols()
-        candidates: list[str] = []
+        cache = self.engine.ohlcv_cache
+        if cache is None:
+            cache = self.engine.load_ohlcv_cache()
 
-        for symbol in symbols:
-            try:
-                df = self.engine.get_ohlcv(symbol)
-                if len(df) < self._MIN_BARS:
-                    continue
+        if cache.empty:
+            return []
 
-                # 向量化：前20日 high 的滚动最大值（不含当日，shift(1) 后取 rolling(20)）
-                df["high_20"] = df["high"].shift(1).rolling(20).max()
+        df = cache.reset_index().sort_values(["symbol", "date"])
 
-                last = df.iloc[-1]
-                prev = df.iloc[-2]  # 获取昨日数据，用于对比
+        # 前20日 high 的滚动最大值（不含当日）
+        df["high_20"] = df.groupby("symbol")["high"].transform(
+            lambda s: s.shift(1).rolling(20).max()
+        )
+        df["prev_close"] = df.groupby("symbol")["close"].shift(1)
 
-                if pd.isna(last["high_20"]):
-                    continue
+        # 取每只股票最新一天
+        latest = df.groupby("symbol").tail(1)
+        latest = latest.dropna(subset=["high_20"])
 
-                # 核心条件 1：突破前 20 天最高点
-                breakout = last["close"] > last["high_20"]
-                # 核心条件 2：流动性过亿
-                liquid = last["turnover"] > 100_000_000
+        breakout = latest["close"] > latest["high_20"]
+        liquid = latest["turnover"] > 100_000_000
+        is_yang = latest["close"] > latest["open"]
+        is_up = latest["close"] > latest["prev_close"]
 
-                # 【新增防守条件】拒绝郑州煤电式的高开低走大阴线！
-                is_yang = last["close"] > last["open"]  # 实体必须是阳线（红柱）
-                is_up = last["close"] > prev["close"]  # 必须是真涨，不能是假阳线
+        candidates_df = latest[breakout & liquid & is_yang & is_up].copy()
 
-                if breakout and liquid and is_yang and is_up:
-                    candidates.append(symbol)
+        # 按流通市值从大到小排序：close * volume / (turn / 100)
+        if not candidates_df.empty:
+            candidates_df["market_cap"] = 0.0
+            valid = candidates_df["turn"] > 0
+            candidates_df.loc[valid, "market_cap"] = (
+                candidates_df.loc[valid, "volume"]
+                / (candidates_df.loc[valid, "turn"] / 100)
+                * candidates_df.loc[valid, "close"]
+            )
+            candidates_df = candidates_df.sort_values("market_cap", ascending=False)
 
-            except Exception as exc:
-                logger.warning(f"[{symbol}] TurtleTradeStrategy 计算失败：{exc}")
-                continue
-
-        # 按流通市值从大到小排序
-        if candidates:
-            market_caps = self._get_market_caps(candidates)
-            candidates.sort(key=lambda s: market_caps.get(s, 0), reverse=True)
+        candidates = candidates_df["symbol"].tolist()
 
         logger.info(f"TurtleTradeStrategy 选出 {len(candidates)} 只股票")
         return candidates
