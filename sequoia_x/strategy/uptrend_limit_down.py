@@ -3,6 +3,7 @@
 import pandas as pd
 
 from sequoia_x.core.logger import get_logger
+from sequoia_x.strategy._utils import get_limit_pct
 from sequoia_x.strategy.base import BaseStrategy
 
 logger = get_logger(__name__)
@@ -13,14 +14,10 @@ class UptrendLimitDownStrategy(BaseStrategy):
 
     选股条件（向量化，严禁 iterrows）：
     1. 处于上升趋势：昨日20日均线 > 昨日60日均线
-    2. 放量跌停：今日 close <= 昨日 close * 0.905
-                且今日 volume > 20日均量的 2.0 倍
-
-    Attributes:
-        webhook_key: 路由到 'limit_down' 专属飞书机器人。
+    2. 放量跌停：今日 close <= 昨日 close * (1 - 板块涨跌幅限制)
+                 且今日 volume > 20日均量的 2.0 倍
     """
 
-    webhook_key: str = "limit_down"
     _MIN_BARS: int = 60  # 至少需要 60 根 K 线（60日均线）
 
     def run(self) -> list[str]:
@@ -52,8 +49,9 @@ class UptrendLimitDownStrategy(BaseStrategy):
 
                 # 条件 1：上升趋势（昨日均线多头排列）
                 uptrend = prev["ma20"] > prev["ma60"]
-                # 条件 2：放量跌停
-                limit_down = today["close"] <= prev["close"] * 0.905
+                # 条件 2：放量跌停（按板块动态阈值）
+                limit_pct = get_limit_pct(symbol, is_st=bool(today.get("is_st", 0)))
+                limit_down = today["close"] <= prev["close"] * (1 - limit_pct + 0.005)
                 volume_surge = today["volume"] > today["vol_ma20"] * 2.0
 
                 if uptrend and limit_down and volume_surge:

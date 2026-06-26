@@ -15,53 +15,30 @@ class TurtleTradeStrategy(BaseStrategy):
     1. 突破新高：今日 close > 前20个交易日 high 的最大值
     2. 流动性：今日 turnover > 100,000,000
     3. 防诱多过滤：今日必须是实体阳线（今日 close > 今日 open），且必须真涨（今日 close > 昨日 close）
-
-    Attributes:
-        webhook_key: 路由到 'turtle' 专属飞书机器人。
     """
 
-    webhook_key: str = "turtle"
     _MIN_BARS: int = 21  # 至少需要 21 根 K 线（20日窗口 + 当日）
 
     def _get_market_caps(self, symbols: list[str]) -> dict[str, float]:
-        """通过 baostock 查询候选股票的流通市值（不复权收盘价 × 流通股本）。
+        """基于本地缓存数据推导流通市值：close * volume / (turn / 100)。
 
-        流通股本 = 成交量 / (换手率% / 100)
-        流通市值 = 流通股本 × 不复权收盘价
+        该推导依赖已存储的换手率（turn），无需额外调用 baostock。
         """
-        from datetime import date
-
-        import baostock as bs
-
-        today_str = date.today().strftime("%Y-%m-%d")
         market_caps: dict[str, float] = {}
-
-        bs.login()
-        try:
-            for symbol in symbols:
-                bs_code = self.engine.to_baostock_code(symbol)
-                rs = bs.query_history_k_data_plus(
-                    bs_code,
-                    "close,volume,turn",
-                    start_date=today_str,
-                    end_date=today_str,
-                    frequency="d",
-                    adjustflag="3",  # 不复权，真实价格
-                )
-                while rs.next():
-                    row = rs.get_row_data()
-                    try:
-                        close = float(row[0])
-                        volume = float(row[1])
-                        turn = float(row[2])
-                        if turn > 0:
-                            circulating_shares = volume / (turn / 100)
-                            market_caps[symbol] = circulating_shares * close
-                    except (ValueError, ZeroDivisionError):
-                        continue
-        finally:
-            bs.logout()
-
+        for symbol in symbols:
+            try:
+                df = self.engine.get_ohlcv(symbol)
+                if df.empty:
+                    continue
+                last = df.iloc[-1]
+                close = float(last["close"])
+                volume = float(last["volume"])
+                turn = float(last["turn"])
+                if turn > 0 and pd.notna(close) and pd.notna(volume):
+                    circulating_shares = volume / (turn / 100)
+                    market_caps[symbol] = circulating_shares * close
+            except (ValueError, ZeroDivisionError, KeyError):
+                continue
         return market_caps
 
     def run(self) -> list[str]:

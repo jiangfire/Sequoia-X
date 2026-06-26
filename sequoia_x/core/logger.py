@@ -23,7 +23,7 @@ def get_logger(name: str) -> logging.Logger:
     """
     logger = logging.getLogger(name)
 
-    if logger.handlers:
+    if any(isinstance(h, RichHandler) for h in logger.handlers):
         return logger
 
     handler = RichHandler(

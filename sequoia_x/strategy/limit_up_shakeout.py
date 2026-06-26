@@ -1,6 +1,7 @@
 """涨停洗盘策略：昨日涨停后今日放量收阴但不破昨收。"""
 
 from sequoia_x.core.logger import get_logger
+from sequoia_x.strategy._utils import get_limit_pct
 from sequoia_x.strategy.base import BaseStrategy
 
 logger = get_logger(__name__)
@@ -10,16 +11,12 @@ class LimitUpShakeoutStrategy(BaseStrategy):
     """涨停洗盘策略。
 
     选股条件（向量化，严禁 iterrows）：
-    1. 昨日涨停：昨日 close >= 前日 close * 1.095
+    1. 昨日涨停：昨日 close >= 前日 close * (1 + 板块涨跌幅限制)
     2. 今日收阴：今日 close < 今日 open
     3. 今日放量：今日 volume > 昨日 volume * 2.0
     4. 支撑不破：今日 low >= 昨日 close
-
-    Attributes:
-        webhook_key: 路由到 'shakeout' 专属飞书机器人。
     """
 
-    webhook_key: str = "shakeout"
     _MIN_BARS: int = 3  # 至少需要 3 根 K 线（前日、昨日、今日）
 
     def run(self) -> list[str]:
@@ -43,8 +40,9 @@ class LimitUpShakeoutStrategy(BaseStrategy):
                 prev1 = df.iloc[-2]  # 昨日
                 today = df.iloc[-1]  # 今日
 
-                # 条件 1：昨日涨停
-                limit_up_yesterday = prev1["close"] >= prev2["close"] * 1.095
+                # 条件 1：昨日涨停（按板块动态阈值）
+                limit_pct = get_limit_pct(symbol, is_st=bool(today.get("is_st", 0)))
+                limit_up_yesterday = prev1["close"] >= prev2["close"] * (1 + limit_pct - 0.005)
                 # 条件 2：今日收阴
                 bearish_today = today["close"] < today["open"]
                 # 条件 3：今日放量
