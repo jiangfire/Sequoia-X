@@ -30,12 +30,10 @@ class RpsBreakoutStrategy(BaseStrategy):
         df["close_shift"] = df.groupby("symbol")["close"].shift(self.rps_period)
         df["pct_change"] = (df["close"] - df["close_shift"]) / df["close_shift"]
         # 用 shift(1) 排除当天，计算过去 rps_period 天的最高价
-        df["roll_high"] = (
-            df.groupby("symbol")["high"]
-            .shift(1)
+        df["roll_high"] = df.groupby("symbol")["high"].transform(
+            lambda s: s.shift(1)
             .rolling(window=self.rps_period, min_periods=self.rps_period // 2)
             .max()
-            .reset_index(level=0, drop=True)
         )
 
         latest_date = df["date"].max()
