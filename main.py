@@ -29,7 +29,7 @@ from sequoia_x.strategy.uptrend_limit_down import UptrendLimitDownStrategy
 def main() -> None:
     import socket
 
-    socket.setdefaulttimeout(10.0)
+    socket.setdefaulttimeout(30.0)
 
     parser = argparse.ArgumentParser(description="Sequoia-X V2 选股系统")
     parser.add_argument(

@@ -285,12 +285,21 @@ class DataEngine:
 
         last_date_map = self._get_last_date_map()
 
-        def _login():
-            lg = bs.login()
-            if lg.error_code != "0":
-                logger.error(f"baostock 登录失败: {lg.error_msg}")
-                return False
-            return True
+        def _login(max_attempts: int = 3):
+            for attempt in range(max_attempts):
+                try:
+                    lg = bs.login()
+                    if lg.error_code == "0":
+                        return True
+                    logger.warning(f"baostock 登录返回错误: {lg.error_msg}")
+                except Exception as exc:
+                    logger.warning(f"baostock 登录异常: {exc}")
+                if attempt < max_attempts - 1:
+                    wait = 2 ** (attempt + 1)
+                    logger.info(f"baostock 登录第 {attempt + 1} 次失败，{wait}s 后重试...")
+                    time.sleep(wait)
+            logger.error("baostock 登录失败: 已达到最大重试次数")
+            return False
 
         if not _login():
             return
