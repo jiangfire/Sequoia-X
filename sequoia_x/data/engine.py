@@ -203,8 +203,12 @@ class DataEngine:
 
     # ── 数据同步 ──
 
-    def sync_today_bulk(self) -> int:
-        """多进程并行通过 baostock 拉取增量数据（后复权），写入 SQLite。"""
+    def sync_today_bulk(self, daily_query_limit: int = 3500) -> int:
+        """多进程并行通过 baostock 拉取增量数据（后复权），写入 SQLite。
+
+        为避免触发 baostock 单日查询上限，仅处理最近 3 个交易日未更新的股票，
+        且总查询次数不超过 daily_query_limit。
+        """
         from datetime import date, timedelta
         from multiprocessing import Pool
 
@@ -215,12 +219,25 @@ class DataEngine:
             logger.warning("本地无股票数据，请先执行 --backfill")
             return 0
 
+        # 只处理近 3 个交易日未更新的股票，避免每天全量更新
+        cutoff_date = (date.today() - timedelta(days=3)).strftime("%Y-%m-%d")
+
         tasks = []
         for symbol, last_date in last_date_map.items():
             if last_date >= today_str:
                 continue
+            if last_date >= cutoff_date:
+                # 最近已有数据，不浪费额度追平停牌日
+                continue
             start = (date.fromisoformat(last_date) + timedelta(days=1)).strftime("%Y-%m-%d")
             tasks.append((symbol, self.to_baostock_code(symbol), start, today_str))
+
+        if len(tasks) > daily_query_limit:
+            logger.warning(
+                f"需更新 {len(tasks)} 只股票，超过单日上限 {daily_query_limit}，"
+                f"仅处理前 {daily_query_limit} 只"
+            )
+            tasks = tasks[:daily_query_limit]
 
         if not tasks:
             logger.info("所有股票已是最新，无需更新")
@@ -266,13 +283,15 @@ class DataEngine:
         logger.info(f"sync_today_bulk: 写入 {count} 条数据")
         return count
 
-    def backfill(self, symbols: list[str]) -> None:
+    def backfill(self, symbols: list[str], daily_query_limit: int = 3500) -> None:
         """通过 baostock 批量回填历史日 K 线数据（后复权）。
 
         容错机制：
         - 单只股票失败自动重试 3 次，间隔递增（2s/4s/8s）
         - 每 200 只股票自动重连 baostock（防止长连接超时）
         - 已入库的自动 skip，中断后可重跑续传
+        - 优先回填本地无数据的股票，避免每日在已有数据上重复消耗额度
+        - 达到 daily_query_limit 后主动停止，便于次日继续
         """
         import time
         from datetime import date, timedelta
@@ -284,6 +303,17 @@ class DataEngine:
         reconnect_interval = 200  # 每处理 N 只股票重连一次
 
         last_date_map = self._get_last_date_map()
+        local_symbols = set(last_date_map.keys())
+
+        # 优先处理本地无数据的股票，其次才是需要续传的股票
+        missing_symbols = [s for s in symbols if s not in local_symbols]
+        existing_symbols = [s for s in symbols if s in local_symbols]
+        ordered_symbols = missing_symbols + existing_symbols
+
+        logger.info(
+            f"待回填 {len(symbols)} 只：本地无数据 {len(missing_symbols)} 只，"
+            f"已存在 {len(existing_symbols)} 只，单日查询上限 {daily_query_limit}"
+        )
 
         def _login(max_attempts: int = 3):
             for attempt in range(max_attempts):
@@ -310,11 +340,19 @@ class DataEngine:
         skipped = 0
         failed = 0
         total_rows = 0
+        query_count = 0
         since_reconnect = 0
         pending_frames: list[pd.DataFrame] = []
 
         try:
-            for i, symbol in enumerate(symbols):
+            for i, symbol in enumerate(ordered_symbols):
+                if query_count >= daily_query_limit:
+                    logger.info(
+                        f"达到单日查询上限 {daily_query_limit}，暂停回填，"
+                        f"剩余 {len(symbols) - i} 只留到次日继续"
+                    )
+                    break
+
                 last_date = last_date_map.get(symbol)
                 if last_date and last_date >= today_str:
                     skipped += 1
@@ -383,6 +421,8 @@ class DataEngine:
                         else:
                             logger.warning(f"[{symbol}] {max_retries}次重试均失败，跳过")
 
+                query_count += 1
+
                 if not query_ok:
                     failed += 1
                     continue
@@ -446,7 +486,8 @@ class DataEngine:
 
         self._expire_cache()
         logger.info(
-            f"回填完成 — 成功: {success} | 跳过: {skipped} | 失败: {failed} | 总条数: {total_rows}"
+            f"回填完成 — 成功: {success} | 跳过: {skipped} | 失败: {failed} | "
+            f"总条数: {total_rows} | 本次查询: {query_count}"
         )
 
     def _bulk_append(self, frames: list[pd.DataFrame]) -> int:
